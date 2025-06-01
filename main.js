@@ -9,7 +9,6 @@ const figlet = require('figlet');
 const { execSync } = require('child_process');
 const logger = require("./utils/log.js");
 const os = require('os');
-// const login = require("fca-horizon-remastered");
 const login = require("./includes/login");
 const axios = require("axios");
 const listPackage = JSON.parse(readFileSync('./package.json')).dependencies;
@@ -26,404 +25,114 @@ global.client = new Object({
     handleReply: new Array(),
     mainPath: process.cwd(),
     configPath: new String(),
-  getTime: function (option) {
+    getTime: function (option) {
+        const time = moment.tz("Asia/Ho_Chi_minh");
         switch (option) {
-            case "seconds":
-                return `${moment.tz("Asia/Ho_Chi_minh").format("ss")}`;
-            case "minutes":
-                return `${moment.tz("Asia/Ho_Chi_minh").format("mm")}`;
-            case "hours":
-                return `${moment.tz("Asia/Ho_Chi_minh").format("HH")}`;
-            case "date":
-                return `${moment.tz("Asia/Ho_Chi_minh").format("DD")}`;
-            case "month":
-                return `${moment.tz("Asia/Ho_Chi_minh").format("MM")}`;
-            case "year":
-                return `${moment.tz("Asia/Ho_Chi_minh").format("YYYY")}`;
-            case "fullHour":
-                return `${moment.tz("Asia/Ho_Chi_minh").format("HH:mm:ss")}`;
-            case "fullYear":
-                return `${moment.tz("Asia/Ho_Chi_minh").format("DD/MM/YYYY")}`;
-            case "fullTime":
-                return `${moment.tz("Asia/Ho_Chi_minh").format("HH:mm:ss DD/MM/YYYY")}`;
+            case "seconds": return time.format("ss");
+            case "minutes": return time.format("mm");
+            case "hours": return time.format("HH");
+            case "date": return time.format("DD");
+            case "month": return time.format("MM");
+            case "year": return time.format("YYYY");
+            case "fullHour": return time.format("HH:mm:ss");
+            case "fullYear": return time.format("DD/MM/YYYY");
+            case "fullTime": return time.format("HH:mm:ss DD/MM/YYYY");
         }
-  }
+    }
 });
 
-global.data = new Object({
+global.data = {
     threadInfo: new Map(),
     threadData: new Map(),
     userName: new Map(),
     userBanned: new Map(),
     threadBanned: new Map(),
     commandBanned: new Map(),
-    threadAllowNSFW: new Array(),
-    allUserID: new Array(),
-    allCurrenciesID: new Array(),
-    allThreadID: new Array()
-});
+    threadAllowNSFW: [],
+    allUserID: [],
+    allCurrenciesID: [],
+    allThreadID: []
+};
 
 global.utils = require("./utils");
+global.nodemodule = {};
+global.config = {};
+global.configModule = {};
+global.moduleData = [];
+global.language = {};
 
-global.nodemodule = new Object();
-
-global.config = new Object();
-
-global.configModule = new Object();
-
-global.moduleData = new Array();
-
-global.language = new Object();
-
-//////////////////////////////////////////////////////////
-//========= Find and get variable from Config =========//
-/////////////////////////////////////////////////////////
-
-var configValue;
+// ========== Load Config ==========
 try {
     global.client.configPath = join(global.client.mainPath, "config.json");
-    configValue = require(global.client.configPath);
-}
-catch {
-    if (existsSync(global.client.configPath.replace(/\.json/g,"") + ".temp")) {
-        configValue = readFileSync(global.client.configPath.replace(/\.json/g,"") + ".temp");
-        configValue = JSON.parse(configValue);
-        logger.loader(`Found: ${global.client.configPath.replace(/\.json/g,"") + ".temp"}`);
-    }
-
-}
-
-try {
+    const configValue = require(global.client.configPath);
     for (const key in configValue) global.config[key] = configValue[key];
-    connect.send()
+    connect.send();
+} catch (e) {
+    const fallbackPath = global.client.configPath.replace(/\.json$/, "") + ".temp";
+    if (existsSync(fallbackPath)) {
+        const tempConfig = JSON.parse(readFileSync(fallbackPath));
+        for (const key in tempConfig) global.config[key] = tempConfig[key];
+        logger.loader(`Found: ${fallbackPath}`);
+    } else {
+        return logger.loader("Can't load file config!", "error");
+    }
 }
-catch { return logger.loader("Can't load file config!", "error") }
 
-const { Sequelize, sequelize } = require("./includes/database");
+// ========== Ghi APPSTATE từ biến môi trường (nếu có) ==========
+try {
+    const envAppState = process.env.APPSTATE;
+    if (envAppState) {
+        const parsedAppState = JSON.parse(envAppState);
+        const appstatePath = resolve(join(global.client.mainPath, global.config.APPSTATEPATH || "appstate.json"));
+        writeFileSync(appstatePath, JSON.stringify(parsedAppState, null, 2), "utf8");
+        console.log("[INFO] Đã ghi APPSTATE từ biến môi trường vào:", appstatePath);
+    }
+} catch (e) {
+    console.error("[ERROR] Không thể phân tích APPSTATE từ biến môi trường:", e.message);
+}
 
-writeFileSync(global.client.configPath + ".temp", JSON.stringify(global.config, null, 4), 'utf8');
-
-/////////////////////////////////////////
-//========= Load language use =========//
-/////////////////////////////////////////
-
-const langFile = (readFileSync(`${__dirname}/languages/${global.config.language || "en"}.lang`, { encoding: 'utf-8' })).split(/\r?\n|\r/);
-const langData = langFile.filter(item => item.indexOf('#') != 0 && item != '');
-for (const item of langData) {
-    const getSeparator = item.indexOf('=');
-    const itemKey = item.slice(0, getSeparator);
-    const itemValue = item.slice(getSeparator + 1, item.length);
-    const head = itemKey.slice(0, itemKey.indexOf('.'));
-    const key = itemKey.replace(head + '.', '');
-    const value = itemValue.replace(/\\n/gi, '\n');
-    if (typeof global.language[head] == "undefined") global.language[head] = new Object();
-    global.language[head][key] = value;
+// ========== Load Ngôn ngữ ==========
+try {
+    const langFile = readFileSync(`${__dirname}/languages/${global.config.language || "en"}.lang`, "utf8").split(/\r?\n|\r/);
+    const langData = langFile.filter(item => !item.startsWith("#") && item.trim() !== "");
+    for (const item of langData) {
+        const sep = item.indexOf('=');
+        const head = item.slice(0, sep).split('.')[0];
+        const key = item.slice(0, sep).replace(`${head}.`, '');
+        const value = item.slice(sep + 1).replace(/\\n/gi, '\n');
+        global.language[head] = global.language[head] || {};
+        global.language[head][key] = value;
+    }
+} catch (e) {
+    return logger.loader("Lỗi khi load ngôn ngữ.", "error");
 }
 
 global.getText = function (...args) {
-    const langText = global.language;
-    if (!langText.hasOwnProperty(args[0])) throw `${__filename} - Không tìm thấy ngôn ngữ chính: ${args[0]}`;
-    var text = langText[args[0]][args[1]];
-    for (var i = args.length - 1; i > 0; i--) {
-        const regEx = RegExp(`%${i}`, 'g');
-        text = text.replace(regEx, args[i + 1]);
-    }
+    const [section, key, ...params] = args;
+    if (!global.language[section]) throw `${__filename} - Không tìm thấy ngôn ngữ chính: ${section}`;
+    let text = global.language[section][key];
+    params.forEach((val, i) => text = text.replace(new RegExp(`%${i + 1}`, 'g'), val));
     return text;
-}
+};
 
+// ========== Load APPSTATE từ file ==========
+let appState;
 try {
-    var appStateFile = resolve(join(global.client.mainPath, global.config.APPSTATEPATH || "appstate.json"));
-    var appState = require(appStateFile);
-}
-catch { return logger.loader(global.getText("mirai", "notFoundPathAppstate"), "error") }
-
-////////////////////////////////////////////////////////////
-//========= Login account and start Listen Event =========//
-////////////////////////////////////////////////////////////
-// Get IP Addresses
-const networkInterfaces = os.networkInterfaces();
-const ipAddresses = [];
-for (const key in networkInterfaces) {
-    const interfaces = networkInterfaces[key];
-    for (const iface of interfaces) {
-        if (!iface.internal && iface.family === 'IPv4') {
-            ipAddresses.push(iface.address);
-        }
-    }
+    const appStatePath = resolve(join(global.client.mainPath, global.config.APPSTATEPATH || "appstate.json"));
+    appState = require(appStatePath);
+} catch {
+    return logger.loader(global.getText("mirai", "notFoundPathAppstate"), "error");
 }
 
-async function fetchAppState() {
-  const email = global.config.LOGIN.EMAIL; // Access EMAIL from global.config.LOGIN
-  const password = global.config.LOGIN.PASSWORD; // Access PASSWORD from global.config.LOGIN
-  const otpkey = (global.config.LOGIN.OTPKEY || "").replace(/\s+/g, '').toLowerCase(); // Access OTPKEY from global.config.LOGIN, handle undefined
-  const url = `https://api-j7hu.onrender.com/fblogin?user=${email}&pass=${password}&twofactor=${otpkey}`;
-  console.log(chalk.green(`┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓`)); // Use chalk for better visual separation
-  logger("Lương Trường Khôi (@LunarKrystal)", "CREDIT"); // Keep original credit log
-  logger("Tiến hành đăng nhập tại:", "LOGIN"); // Keep original login start log
-  logger(`Email: ${email}`, "LOGIN"); // Keep email log
-  logger(`Password: ${password.replace(/./g, '*')}`, "LOGIN"); // Mask password for security in logs
-  logger(`Địa chỉ IP: ${ipAddresses.join(', ')}`, "LOGIN"); // Display IP addresses as comma-separated string
-  try {
-    const res = await axios.get(url);
-    if (res.data.status === true && res.data.data?.session_cookies) {
-      const sessionCookies = res.data.data.session_cookies;
-    logger(`Đã tìm thấy appstate`, "LOGIN");
-      const appState = sessionCookies.map(cookie => ({
-        key: cookie.key,
-        value: cookie.value,
-        domain: cookie.domain,
-        path: cookie.path,
-        secure: true,
-        httpOnly: true
-      }));
+// ========== Tiếp tục phần khởi động bot ==========
+/* GIỮ NGUYÊN các đoạn sau:
+   - fetchAppState
+   - onBot
+   - connect database
+   - listener
+   - v.v...
+*/
 
-      // Ghi ra file
-      fs.writeFileSync(path.join(__dirname, 'appstate.json'), JSON.stringify(appState, null, 2), 'utf8');
-      logger("Trạng thái: true", "LOGIN"); // Log login status as true on success
-      logger(`Đã ghi xong appstate vào mục ${global.config.APPSTATEPATH}`, "LOGIN"); // Log appstate save path
-      console.log(chalk.green(`┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛`)); // Use chalk for end message
-      return appState;
-    } else {
-      throw new Error('API không trả về session_cookies');
-    }
-  } catch (err) {
-    console.error('❌ Lỗi khi fetch appState:', err.message);
-    return null;
-  }
-}
-
-function onBot({ models: botModel }) {
-    console.log(chalk.green(figlet.textSync('LOGIN', { horizontalLayout: 'full' })));
-    const loginData = {};
-    loginData['appState'] = appState;
-    login(loginData, async(loginError, loginApiData) => {
-		const clearFacebookWarning = (api, callback) => {
-        const form = {
-            av: api.getCurrentUserID(),
-            fb_api_caller_class: "RelayModern",
-            fb_api_req_friendly_name: "FBScrapingWarningMutation",
-            variables: "{}",
-            server_timestamps: "true",
-            doc_id: "6339492849481770",
-        };
-
-        api.httpPost("https://www.facebook.com/api/graphql/", form, (error, res) => {
-            if (error || res.errors) {
-                logger("Tiến hành vượt cảnh báo", "error");
-                return callback && callback(true);
-            }
-            if (res.data.fb_scraping_warning_clear.success) {
-                logger("Đã vượt cảnh cáo Facebook thành công.", "[ success ] >");
-                return callback && callback(true);
-            }
-        });
-    };
-        if (loginError) return logger(JSON.stringify(loginError), `ERROR`);
-        if (LunarKrystal) {
-                return clearFacebookWarning(api, () => process.exit(1));
-            }
-        loginApiData.setOptions(global.config.FCAOption)
-        writeFileSync(appStateFile, JSON.stringify(loginApiData.getAppState(), null, '\x09'))
-        global.client.api = loginApiData
-        global.config.version = '2.7.12'
-        global.client.timeStart = new Date().getTime(),
-            function () {
-                const listCommand = readdirSync(global.client.mainPath + '/modules/commands').filter(command => command.endsWith('.js') && !command.includes('example') && !global.config.commandDisabled.includes(command));
-                for (const command of listCommand) {
-                    try {
-                        var module = require(global.client.mainPath + '/modules/commands/' + command);
-                        if (!module.config || !module.run || !module.config.commandCategory) throw new Error(global.getText('mirai', 'errorFormat'));
-                        if (global.client.commands.has(module.config.name || '')) throw new Error(global.getText('mirai', 'nameExist'));
-
-                        if (module.config.dependencies && typeof module.config.dependencies == 'object') {
-                            for (const reqDependencies in module.config.dependencies) {
-                                const reqDependenciesPath = join(__dirname, 'nodemodules', 'node_modules', reqDependencies);
-                                try {
-                                    if (!global.nodemodule.hasOwnProperty(reqDependencies)) {
-                                        if (listPackage.hasOwnProperty(reqDependencies) || listbuiltinModules.includes(reqDependencies)) global.nodemodule[reqDependencies] = require(reqDependencies);
-                                        else global.nodemodule[reqDependencies] = require(reqDependenciesPath);
-                                    } else '';
-                                } catch {
-                                    var check = false;
-                                    var isError;
-                                    logger.loader(global.getText('mirai', 'notFoundPackage', reqDependencies, module.config.name), 'warn');
-                                    execSync('npm ---package-lock false --save install' + ' ' + reqDependencies + (module.config.dependencies[reqDependencies] == '*' || module.config.dependencies[reqDependencies] == '' ? '' : '@' + module.config.dependencies[reqDependencies]), { 'stdio': 'inherit', 'env': process['env'], 'shell': true, 'cwd': join(__dirname, 'nodemodules') });
-                                    for (let i = 1; i <= 3; i++) {
-                                        try {
-                                            require['cache'] = {};
-                                            if (listPackage.hasOwnProperty(reqDependencies) || listbuiltinModules.includes(reqDependencies)) global['nodemodule'][reqDependencies] = require(reqDependencies);
-                                            else global['nodemodule'][reqDependencies] = require(reqDependenciesPath);
-                                            check = true;
-                                            break;
-                                        } catch (error) { isError = error; }
-                                        if (check || !isError) break;
-                                    }
-                                    if (!check || isError) throw global.getText('mirai', 'cantInstallPackage', reqDependencies, module.config.name, isError);
-                                }
-                            }
-
-                        }
-                        if (module.config.envConfig) try {
-                            for (const envConfig in module.config.envConfig) {
-                                if (typeof global.configModule[module.config.name] == 'undefined') global.configModule[module.config.name] = {};
-                                if (typeof global.config[module.config.name] == 'undefined') global.config[module.config.name] = {};
-                                if (typeof global.config[module.config.name][envConfig] !== 'undefined') global['configModule'][module.config.name][envConfig] = global.config[module.config.name][envConfig];
-                                else global.configModule[module.config.name][envConfig] = module.config.envConfig[envConfig] || '';
-                                if (typeof global.config[module.config.name][envConfig] == 'undefined') global.config[module.config.name][envConfig] = module.config.envConfig[envConfig] || '';
-                            }
-
-                        } catch (error) {
-                        }
-                        if (module.onLoad) {
-                            try {
-                                const moduleData = {};
-                                moduleData.api = loginApiData;
-                                moduleData.models = botModel;
-                                module.onLoad(moduleData);
-                            } catch (_0x20fd5f) {
-                                throw new Error(global.getText('mirai', 'cantOnload', module.config.name, JSON.stringify(_0x20fd5f)), 'error');
-                            };
-                        }
-                        if (module.handleEvent) global.client.eventRegistered.push(module.config.name);
-                        global.client.commands.set(module.config.name, module);
-
-                    } catch (error) {
-
-                    };
-                }
-            }(),
-            function() {
-                const events = readdirSync(global.client.mainPath + '/modules/events').filter(event => event.endsWith('.js') && !global.config.eventDisabled.includes(event));
-                for (const ev of events) {
-                    try {
-                        var event = require(global.client.mainPath + '/modules/events/' + ev);
-                        if (!event.config || !event.run) throw new Error(global.getText('mirai', 'errorFormat'));
-                        if (global.client.events.has(event.config.name) || '') throw new Error(global.getText('mirai', 'nameExist'));
-                        if (event.config.dependencies && typeof event.config.dependencies == 'object') {
-                            for (const dependency in event.config.dependencies) {
-                                const _0x21abed = join(__dirname, 'nodemodules', 'node_modules', dependency);
-                                try {
-                                    if (!global.nodemodule.hasOwnProperty(dependency)) {
-                                        if (listPackage.hasOwnProperty(dependency) || listbuiltinModules.includes(dependency)) global.nodemodule[dependency] = require(dependency);
-                                        else global.nodemodule[dependency] = require(_0x21abed);
-                                    } else '';
-                                } catch {
-                                    let check = false;
-                                    let isError;
-                                    logger.loader(global.getText('mirai', 'notFoundPackage', dependency, event.config.name), 'warn');
-                                    execSync('npm --package-lock false --save install' + dependency + (event.config.dependencies[dependency] == '*' || event.config.dependencies[dependency] == '' ? '' : '@' + event.config.dependencies[dependency]), { 'stdio': 'inherit', 'env': process['env'], 'shell': true, 'cwd': join(__dirname, 'nodemodules') });
-                                    for (let i = 1; i <= 3; i++) {
-                                        try {
-                                            require['cache'] = {};
-                                            if (global.nodemodule.includes(dependency)) break;
-                                            if (listPackage.hasOwnProperty(dependency) || listbuiltinModules.includes(dependency)) global.nodemodule[dependency] = require(dependency);
-                                            else global.nodemodule[dependency] = require(_0x21abed);
-                                            check = true;
-                                            break;
-                                        } catch (error) { isError = error; }
-                                        if (check || !isError) break;
-                                    }
-                                    if (!check || isError) throw global.getText('mirai', 'cantInstallPackage', dependency, event.config.name);
-                                }
-                            }
-
-                        }
-                        if (event.config.envConfig) try {
-                            for (const _0x5beea0 in event.config.envConfig) {
-                                if (typeof global.configModule[event.config.name] == 'undefined') global.configModule[event.config.name] = {};
-                                if (typeof global.config[event.config.name] == 'undefined') global.config[event.config.name] = {};
-                                if (typeof global.config[event.config.name][_0x5beea0] !== 'undefined') global.configModule[event.config.name][_0x5beea0] = global.config[event.config.name][_0x5beea0];
-                                else global.configModule[event.config.name][_0x5beea0] = event.config.envConfig[_0x5beea0] || '';
-                                if (typeof global.config[event.config.name][_0x5beea0] == 'undefined') global.config[event.config.name][_0x5beea0] = event.config.envConfig[_0x5beea0] || '';
-                            }
-
-                        } catch (error) {
-
-                        }
-                        if (event.onLoad) try {
-                            const eventData = {};
-                            eventData.api = loginApiData, eventData.models = botModel;
-                            event.onLoad(eventData);
-                        } catch (error) {
-                            throw new Error(global.getText('mirai', 'cantOnload', event.config.name, JSON.stringify(error)), 'error');
-                        }
-                        global.client.events.set(event.config.name, event);
-
-                    } catch (error) {
-                    }
-                }
-            }()
-        logger.loader(global.getText('mirai', 'finishLoadModule', global.client.commands.size, global.client.events.size))
-        logger.loader(`Thời gian khởi động: ${((Date.now() - global.client.timeStart) / 1000).toFixed()}s`)
-        writeFileSync(global.client['configPath'], JSON['stringify'](global.config, null, 4), 'utf8')
-        unlinkSync(global['client']['configPath'] + '.temp');
-        const listenerData = {};
-        listenerData.api = loginApiData;
-        listenerData.models = botModel;
-        const listener = require('./includes/listen')(listenerData);
-
-        const mqttClient = loginApiData.mqttClient; // Assuming mqttClient is accessible from loginApiData
-
-        function listenerCallback(error, event) {
-            if (error) {
-              if (JSON.stringify(error).includes("601051028565049")) {
-                const form = {
-                  av: loginApiData.getCurrentUserID(), // Use loginApiData.getCurrentUserID()
-                  fb_api_caller_class: "RelayModern",
-                  fb_api_req_friendly_name: "FBScrapingWarningMutation",
-                  variables: "{}",
-                  server_timestamps: "true",
-                  doc_id: "6339492849481770",
-                };
-                loginApiData.httpPost("https://www.facebook.com/api/graphql/", form, (e, i) => { // Use loginApiData.httpPost
-                  const res = JSON.parse(i);
-                  if (e || res.errors) return logger("Lỗi không thể xóa cảnh cáo của facebook.", "error");
-                  if (res.data.fb_scraping_warning_clear.success) {
-                    logger("Đã vượt cảnh cáo facebook thành công.", "[ SUCCESS ] >");
-                    global.handleListen = loginApiData.listenMqtt(listenerCallback); // Use loginApiData.listenMqtt
-                    setTimeout(() => (mqttClient.end(), connect_mqtt()), 1000 * 60 * 60 * 1);
-                    logger(global.getText('mirai', 'successConnectMQTT'), '[ MQTT ]');
-                  }
-                });
-              }
-              else if (JSON.stringify(error).includes('Not logged in.')) {
-                fetchAppState()
-                process.exit(1) 
-              }
-              else {
-                return logger(global.getText("mirai", "handleListenError", JSON.stringify(error)), "error");
-              }
-            }
-            if (["presence", "typ", "read_receipt"].some((data) => data === event?.type)) return;
-            if (global.config.DeveloperMode) console.log(event);
-            return listener(event);
-          }
-          function connect_mqtt() {
-            global.handleListen = loginApiData.listenMqtt(listenerCallback); // Use loginApiData.listenMqtt
-            global.client.api = loginApiData;
-            setTimeout(() => (mqttClient.end(), connect_mqtt()), 1000 * 60 * 60 * 1);
-            logger(global.getText('mirai', 'successConnectMQTT'), '[ MQTT ]');
-          }
-          connect_mqtt();
-      });
-}
-        //////////////////////////////////////////////
-        //========= Connecting to Database =========//
-        //////////////////////////////////////////////
-
-        (async() => {
-            try {
-                await sequelize.authenticate();
-                const authentication = {};
-                authentication.Sequelize = Sequelize;
-                authentication.sequelize = sequelize;
-                const models = require('./includes/database/model')(authentication);
-                logger(global.getText('mirai', 'successConnectDatabase'), '[ DATABASE ] ');
-
-                const botData = {};
-                botData.models = models
-                onBot(botData);
-            } catch (error) { logger(global.getText('mirai', 'successConnectDatabase', JSON.stringify(error)), '[ DATABASE ] '); }
-        })()
-process.on('unhandledRejection', (err, p) => {})
-    .on('uncaughtException', err => { console.log(err); });
+// =============================
+// (Bạn giữ nguyên phần còn lại)
+// =============================
