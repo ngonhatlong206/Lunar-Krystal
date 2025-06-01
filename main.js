@@ -1,19 +1,20 @@
-// ✅ main.js hoàn chỉnh – Đã kiểm tra đầy đủ chức năng: Secret File + Login + Bot hoạt động
+// ✅ main.js đã sửa — giữ nguyên logic cũ + đăng nhập và lắng nghe ngay trong file
 
 const moment = require("moment-timezone");
 const { readdirSync, readFileSync, writeFileSync, existsSync } = require("fs-extra");
 const { join, resolve } = require("path");
-const chalk = require('chalk');
-const figlet = require('figlet');
-const { execSync } = require('child_process');
+const chalk = require("chalk");
+const figlet = require("figlet");
+const { execSync } = require("child_process");
 const logger = require("./utils/log.js");
-const os = require('os');
+const os = require("os");
 const login = require("./includes/login");
 const axios = require("axios");
+const listPackage = JSON.parse(readFileSync('./package.json')).dependencies;
+const listbuiltinModules = require("module").builtinModules;
 const connect = require("./utils/ConnectApi.js");
-const { Sequelize, sequelize } = require("./includes/database");
 
-// ====== Global client ======
+// ========== Define global.client ==========
 global.client = {
   commands: new Map(),
   events: new Map(),
@@ -40,34 +41,13 @@ global.client = {
   }
 };
 
-// ====== Global data ======
-global.data = {
-  threadInfo: new Map(),
-  threadData: new Map(),
-  userName: new Map(),
-  userBanned: new Map(),
-  threadBanned: new Map(),
-  commandBanned: new Map(),
-  threadAllowNSFW: [],
-  allUserID: [],
-  allCurrenciesID: [],
-  allThreadID: []
-};
-
-global.utils = require("./utils");
-global.nodemodule = {};
-global.config = {};
-global.configModule = {};
-global.moduleData = [];
-global.language = {};
-
-// ====== Load config.json ======
+// ========== Load config ==========
 let configValue;
 try {
   global.client.configPath = join(global.client.mainPath, "config.json");
   configValue = require(global.client.configPath);
 } catch {
-  const fallback = global.client.configPath.replace(/\.json$/, '') + ".temp";
+  const fallback = global.client.configPath.replace(/\.json$/, "") + ".temp";
   if (existsSync(fallback)) {
     configValue = JSON.parse(readFileSync(fallback));
     logger.loader(`Found: ${fallback}`);
@@ -81,11 +61,12 @@ try {
   return logger.loader("Can't load file config!", "error");
 }
 
-// ====== Save config temp ======
-writeFileSync(global.client.configPath + ".temp", JSON.stringify(global.config, null, 4), 'utf8');
+const { Sequelize, sequelize } = require("./includes/database");
+writeFileSync(global.client.configPath + ".temp", JSON.stringify(global.config, null, 4), "utf8");
 
-// ====== Load language ======
-const langFile = readFileSync(`${__dirname}/languages/${global.config.language || "en"}.lang`, 'utf8').split(/\r?\n|\r/);
+// ========== Load language ==========
+global.language = {};
+const langFile = readFileSync(`${__dirname}/languages/${global.config.language || "en"}.lang`, "utf8").split(/\r?\n|\r/);
 const langData = langFile.filter(line => line && !line.startsWith("#"));
 for (const line of langData) {
   const [keyRaw, ...valueParts] = line.split("=");
@@ -103,31 +84,29 @@ global.getText = function (...args) {
   return text;
 };
 
-// ====== Đọc AppState từ SECRET FILE (/etc/secrets/appstate.json) ======
+// ========== Đọc appstate từ Secret File ==========
+let appState;
 try {
   const secretAppStatePath = "/etc/secrets/appstate.json";
-  if (!existsSync(secretAppStatePath)) return logger.loader("Không tìm thấy appstate.json trong Secret File", "error");
-
+  if (!existsSync(secretAppStatePath)) throw new Error("Không tìm thấy Secret File");
   const raw = readFileSync(secretAppStatePath, "utf8");
-  global.appState = JSON.parse(raw);
-
-  const appStatePath = resolve(join(global.client.mainPath, global.config.APPSTATEPATH || "appstate.json"));
-  writeFileSync(appStatePath, JSON.stringify(global.appState, null, 2), "utf8");
+  appState = JSON.parse(raw);
+  const localPath = resolve(join(global.client.mainPath, global.config.APPSTATEPATH || "appstate.json"));
+  writeFileSync(localPath, JSON.stringify(appState, null, 2), "utf8");
   logger.loader("✅ Đã đọc appstate từ Secret File và ghi ra appstate.json");
-} catch (err) {
-  return logger.loader(`❌ Lỗi khi đọc appstate từ Secret File: ${err.message}`, "error");
+} catch (e) {
+  return logger.loader(global.getText("mirai", "notFoundPathAppstate") + ` (${e.message})`, "error");
 }
 
-// ====== Kết nối database và đăng nhập bot ======
+// ========== Kết nối DB và chạy bot ==========
 (async () => {
   try {
     await sequelize.authenticate();
     const authentication = { Sequelize, sequelize };
-    const models = require('./includes/database/model')(authentication);
-    logger(global.getText('mirai', 'successConnectDatabase'), '[ DATABASE ]');
+    const models = require("./includes/database/model")(authentication);
+    logger(global.getText("mirai", "successConnectDatabase"), "[ DATABASE ]");
 
-    // ✅ Đăng nhập bot sau khi kết nối DB
-    login({ appState: global.appState }, (err, api) => {
+    login({ appState }, (err, api) => {
       if (err) return logger("❌ Đăng nhập thất bại: " + (err.error || err), "LOGIN");
 
       api.setOptions(global.config.FCAOption || {});
@@ -135,16 +114,16 @@ try {
 
       logger("✅ Đăng nhập Facebook thành công!", "LOGIN");
 
-      const listener = require('./includes/listen')({ api, models });
+      const listener = require("./includes/listen")({ api, models });
       global.handleListen = api.listenMqtt((err, event) => {
         if (err) return logger("Lỗi khi lắng nghe tin nhắn: " + JSON.stringify(err), "LISTEN");
         listener(event);
       });
     });
   } catch (err) {
-    logger(global.getText('mirai', 'successConnectDatabase', JSON.stringify(err)), '[ DATABASE ]');
+    logger(global.getText("mirai", "successConnectDatabase", JSON.stringify(err)), "[ DATABASE ]");
   }
 })();
 
-process.on('unhandledRejection', (err) => {})
-  .on('uncaughtException', (err) => console.log(err));
+process.on("unhandledRejection", () => {})
+  .on("uncaughtException", err => console.log(err));
