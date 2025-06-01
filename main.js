@@ -1,4 +1,4 @@
-// ✅ main.js đã sửa — giữ nguyên logic cũ + đăng nhập và lắng nghe ngay trong file
+// ✅ main.js — đã fix lỗi global.client undefined + thêm debug login rõ ràng
 
 const moment = require("moment-timezone");
 const { readdirSync, readFileSync, writeFileSync, existsSync } = require("fs-extra");
@@ -14,7 +14,7 @@ const listPackage = JSON.parse(readFileSync('./package.json')).dependencies;
 const listbuiltinModules = require("module").builtinModules;
 const connect = require("./utils/ConnectApi.js");
 
-// ========== Define global.client ==========
+// ✅ Đặt global.client lên đầu để tránh lỗi undefined
 global.client = {
   commands: new Map(),
   events: new Map(),
@@ -106,19 +106,34 @@ try {
     const models = require("./includes/database/model")(authentication);
     logger(global.getText("mirai", "successConnectDatabase"), "[ DATABASE ]");
 
+    console.log("🚀 Đã kết nối DB, bắt đầu đăng nhập Facebook...");
+    console.log("📂 Appstate:", JSON.stringify(appState));
+
     login({ appState }, (err, api) => {
-      if (err) return logger("❌ Đăng nhập thất bại: " + (err.error || err), "LOGIN");
+      if (err) {
+        console.log("❌ Login thất bại:", JSON.stringify(err));
+        return logger("❌ Đăng nhập thất bại: " + (err.error || err), "LOGIN");
+      }
+
+      console.log("✅ Login thành công, đang khởi động bot...");
 
       api.setOptions(global.config.FCAOption || {});
       global.client.api = api;
 
-      logger("✅ Đăng nhập Facebook thành công!", "LOGIN");
+      try {
+        const listener = require("./includes/listen")({ api, models });
+        console.log("📡 Bắt đầu lắng nghe sự kiện tin nhắn...");
 
-      const listener = require("./includes/listen")({ api, models });
-      global.handleListen = api.listenMqtt((err, event) => {
-        if (err) return logger("Lỗi khi lắng nghe tin nhắn: " + JSON.stringify(err), "LISTEN");
-        listener(event);
-      });
+        global.handleListen = api.listenMqtt((err, event) => {
+          if (err) {
+            console.log("❌ Lỗi khi lắng nghe:", err);
+            return logger("Lỗi khi lắng nghe tin nhắn: " + JSON.stringify(err), "LISTEN");
+          }
+          listener(event);
+        });
+      } catch (e) {
+        console.log("❌ Lỗi khi load listener:", e);
+      }
     });
   } catch (err) {
     logger(global.getText("mirai", "successConnectDatabase", JSON.stringify(err)), "[ DATABASE ]");
